@@ -1,5 +1,7 @@
 .eunit
 deps
+.gitignore
 *.o
 *.beam
 *.plt
+.*.swp
