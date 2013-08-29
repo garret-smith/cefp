@@ -2,8 +2,8 @@
 default:
 	./rebar compile
 
-test:
-	./rebar compile eunit
+eunit:
+	./rebar -v compile eunit
 
 clean:
 	./rebar clean
@@ -11,6 +11,7 @@ clean:
 PLT_FILE=libs.plt
 
 dialyze: $(PLT_FILE)
+	./rebar compile
 	dialyzer --verbose --no_native --apps ebin --plt $(PLT_FILE)
 
 libs.plt:

@@ -68,6 +68,36 @@ sliding_window_test() ->
     ?assertEqual(3.0, Val)
     .
 
+timer_test() ->
+    Self = self(),
+
+    F0 = cefp:new_flow(
+        [
+            timer_test:create(timer_test),
+            cefp_sink:create(sink, fun(Ev) -> io:fwrite("~p", [Ev]), Self ! Ev end)
+        ],
+        [{start, timer_test}, {timer_test, sink}]
+    ),
+
+    P = cefp:start_link_flow(F0),
+
+    cefp:send_event(P, ev1),
+
+    M = next_msg(1000),
+
+    ?assertEqual(ev1, M),
+
+    timer:sleep(1000),
+
+    M2 = next_msg(1000),
+
+    ?assertEqual(timeout, M2)
+    .
+
+next_msg(Timeout) ->
+    receive X -> X after Timeout -> nada end
+    .
+
 id_match(MatchId) ->
     fun(#reading{id = Id}) -> Id =:= MatchId end
     .

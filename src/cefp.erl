@@ -1,7 +1,7 @@
 
-% CEFP - complex event flow processing
--module(cefp).
+% CEFP - complex event-flow processing
 
+-module(cefp).
 
 -export([
         empty_flow/0,
@@ -20,9 +20,18 @@
         event_time/1,
         event_source/1,
         start_loop/1,
-        loop/1,
         start_timer/2,
-        cancel_timer/1
+        cancel_timer/1,
+        reply/2
+    ]).
+
+-export([
+        loop/1
+    ]).
+
+-export_type([
+        cefp_event/0,
+        cefp_rule/0
     ]).
 
 -record(cefp_rule, {
@@ -30,8 +39,6 @@
         callback  :: atom(),
         state     :: term()
     }).
-
--type cefp_rule() :: #cefp_rule{}.
 
 -record(cefp_flow, {
         rules :: orddict:orddict(), % vertices
@@ -44,15 +51,12 @@
         source % name of the rule the event came from
     }).
 
--type cefp_event() :: #cefp_event{}.
+-opaque cefp_rule() :: #cefp_rule{}.
+-opaque cefp_event() :: #cefp_event{}.
 
--export_type([
-        cefp_event/0,
-        cefp_rule/0
-    ]).
-
--callback handle_event(cefp_event(), term()) -> {ok, term()} | {event, term(), term()} .
--callback handle_call(term(), term(), term()) -> {noreply, term()} | {event, term(), term()} .
+-callback handle_event(cefp_event(), term()) -> {noevent, term()} | {event, term(), term()} | {events, [term()], term()} .
+-callback handle_call(term(), term(), term()) -> {reply, term(), term()} | {noreply, term()} .
+-callback handle_timeout(reference(), term(), term()) -> {noevent, term()} | {event, term(), term()} | {events, [term()], term()} .
 
 empty_flow() ->
     #cefp_flow{rules = orddict:new(), edges = []}
@@ -133,13 +137,13 @@ loop(Flow) ->
             {NewFlow, _Results} = rec_apply(RuleEv, Flow, []),
             loop(NewFlow)
             ;
-        %{timeout, TRef, {rule_timeout, RuleName, Ev}} ->
-        %    % Should handle this differently if RuleName is a list vs an atom?
-        %    % Have to handle this differently, since the nested context is required
-        %    % before the event can be applied and properly "bubble out" of the nesting.
-        %    {NewFlow, _Results} = rec_apply({RuleName, {timeout, TRef, Ev}}, Flow, []),
-        %    loop(NewFlow)
-        %    ;
+        {timeout, TRef, {rule_timeout, RuleName, Ev}} ->
+            % Should handle this differently if RuleName is a list vs an atom?
+            % Have to handle this differently, since the nested context is required
+            % before the event can be applied and properly "bubble out" of the nesting.
+            {NewFlow, _Results} = rec_apply([{RuleName, {timeout, TRef, Ev}}], Flow, []),
+            loop(NewFlow)
+            ;
         shutdown ->
             shutdown
             ;
@@ -154,24 +158,21 @@ rec_apply([], Flow, Results) ->
     ;
 rec_apply(RuleEv, FlowGraph, PrevResults) ->
     {NextEvs, NewFlow, NewResults} = lists:foldr(
-        fun({RuleName, Ev = #cefp_event{}}, {NextEv, Flow, Results}) ->
-                case run_rule(Ev, get_rule(RuleName, Flow)) of
-                    {ok, NewRule} ->
-                        {NextEv, update_rule(NewRule, Flow), Results}
-                        ;
-                    {event, OutEv, NewRule} ->
-                        case edges_out(RuleName, Flow) of
-                            [] ->
-                                {NextEv, update_rule(NewRule, Flow), [OutEv | Results]};
-                            OutRules ->
-                                {[{OutRule, OutEv} || OutRule <- OutRules] ++ NextEv, update_rule(NewRule, Flow), Results}
-                        end
-                    % what about a rule returning multiple events?  Used especially for nesting.
-                end
-        end,
-        {[], FlowGraph, []},
-        RuleEv),
+            fun rec_apply_fold/2,
+            {[], FlowGraph, []},
+            RuleEv),
     rec_apply(NextEvs, NewFlow, NewResults ++ PrevResults)
+    .
+
+rec_apply_fold({RuleName, Ev}, {NextEvs, Flow, Results}) ->
+    {OutEvs, NewRule} = run_rule(Ev, get_rule(RuleName, Flow)),
+    case edges_out(RuleName, Flow) of
+        [] ->
+            {NextEvs, update_rule(NewRule, Flow), OutEvs ++ Results};
+        OutRules ->
+            {[{OutRule, OutEv} || OutRule <- OutRules, OutEv <- OutEvs] ++ NextEvs, update_rule(NewRule, Flow), Results}
+    end
+    % what about a rule returning multiple events?  Used especially for nesting.
     .
 
 get_rule(RuleName, #cefp_flow{rules = Rules}) ->
@@ -182,19 +183,41 @@ update_rule(NewRule = #cefp_rule{name = RuleName}, Flow = #cefp_flow{rules = Rul
     Flow#cefp_flow{rules = orddict:store(RuleName, NewRule, Rules)}
     .
 
--spec run_rule(#cefp_event{}, #cefp_rule{}) -> {ok, #cefp_rule{}} | {event, #cefp_event{}, #cefp_rule{}} .
+%-spec run_rule(#cefp_event{} | {timeout, reference(), term()}, #cefp_rule{}) -> {ok, #cefp_rule{}} | {event, #cefp_event{}, #cefp_rule{}} .
 run_rule(Ev = #cefp_event{}, Rule = #cefp_rule{name = Name, callback = Cb, state = S}) ->
-    put(rule_name, [Name | get(rule_name)]),
-    Result = case Cb:handle_event(Ev, S) of
-        {ok, S1} ->
-            {ok, Rule#cefp_rule{state = S1}};
-        {event, NewEv = #cefp_event{}, S1} ->
-            {event, NewEv, Rule#cefp_rule{state = S1}};
-        {event, NewEv, S1} ->
-            {event, event(NewEv), Rule#cefp_rule{state = S1}}
-    end,
+    handle_reply(call_rule_cb(Name, Cb, handle_event, [Ev, S]), {none, none}, Rule)
+    ;
+run_rule({timeout, Ref, Msg}, Rule = #cefp_rule{name = Name, callback = Cb, state = S}) ->
+    handle_reply(call_rule_cb(Name, Cb, handle_timeout, [Ref, Msg, S]), {none, none}, Rule)
+    .
+
+call_rule_cb(RuleName, M, F, A) ->
+    put(rule_name, [RuleName | get(rule_name)]),
+    Result = apply(M, F, A),
     put(rule_name, tl(get(rule_name))),
     Result
+    .
+
+handle_reply(Reply, From, Rule) ->
+    case Reply of
+        {noevent, S1} ->
+            {[], Rule#cefp_rule{state = S1}};
+        {event, NewEv = #cefp_event{}, S1} ->
+            {[NewEv], Rule#cefp_rule{state = S1}};
+        {event, NewEv, S1} ->
+            {[event(NewEv)], Rule#cefp_rule{state = S1}};
+        {events, NewEvs, S1} ->
+            {NewEvs, Rule#cefp_rule{state = S1}};
+        {noreply, S1} ->
+            {[], Rule#cefp_rule{state = S1}};
+        {reply, Reply, S1} ->
+            reply(From, Reply),
+            {[], Rule#cefp_rule{state = S1}}
+    end
+    .
+
+reply(From, Reply) ->
+    gen:reply(From, Reply)
     .
 
 start_timer(Msg, Time) ->

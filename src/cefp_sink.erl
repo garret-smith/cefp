@@ -6,6 +6,7 @@
 -export(
   [ create/2,
     handle_event/2,
+    handle_timeout/3,
     handle_call/3
   ]).
 
@@ -17,7 +18,11 @@ create(Name, EvFun) when is_function(EvFun, 1) ->
 handle_event(Ev, EvFun) when is_function(EvFun, 1) ->
   EvData = cefp:event_data(Ev),
   EvFun(EvData),
-  {ok, EvFun}
+  {noevent, EvFun}
+  .
+
+handle_timeout(_Ref, _Msg, State) ->
+  {noevent, State}
   .
 
 handle_call(Msg, _From, State) ->

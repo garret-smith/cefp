@@ -1,7 +1,7 @@
 cefp
 ====
 
-# Complex Event Flow Processing
+# Complex Event-Flow Processing
 
 A hybrid dataflow / CEP system.
 
