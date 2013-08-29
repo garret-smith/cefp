@@ -34,7 +34,6 @@ edges_out_test() ->
     .
 
 sliding_window_test() ->
-
     Self = self(),
 
     F0 = cefp:new_flow(
@@ -50,7 +49,7 @@ sliding_window_test() ->
         [{start, sw}, {sw, sink}]
     ),
 
-    P = cefp:start_link_flow(F0),
+    {ok, P} = cefp:start_link_flow(F0),
 
     cefp:send_event(P, #reading{id  = 2, value = 3}),
     cefp:send_event(P, #reading{id  = 2, value = 3}),
@@ -73,13 +72,13 @@ timer_test() ->
 
     F0 = cefp:new_flow(
         [
-            timer_test:create(timer_test),
+            test_rule:create(timer_test),
             cefp_sink:create(sink, fun(Ev) -> io:fwrite("~p", [Ev]), Self ! Ev end)
         ],
         [{start, timer_test}, {timer_test, sink}]
     ),
 
-    P = cefp:start_link_flow(F0),
+    {ok, P} = cefp:start_link_flow(F0),
 
     cefp:send_event(P, ev1),
 
@@ -92,6 +91,23 @@ timer_test() ->
     M2 = next_msg(1000),
 
     ?assertEqual(timeout, M2)
+    .
+
+call_test() ->
+    Self = self(),
+
+    F0 = cefp:new_flow(
+        [
+            test_rule:create(call_test),
+            cefp_sink:create(sink, fun(Ev) -> io:fwrite("~p", [Ev]), Self ! Ev end)
+        ],
+        [{start, call_test}, {call_test, sink}]
+    ),
+
+    {ok, P} = cefp:start_link_flow(F0),
+
+    ?assertEqual(nostate, cefp:call_rule(P, call_test, newstate)),
+    ?assertEqual(newstate, cefp:call_rule(P, call_test, nostate))
     .
 
 next_msg(Timeout) ->

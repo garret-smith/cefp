@@ -3,6 +3,9 @@
 
 -module(cefp).
 
+-behaviour(gen_server).
+
+% public API
 -export([
         empty_flow/0,
         new_flow/2,
@@ -14,19 +17,25 @@
         start_link_flow/1,
         send_event/2,
         send_timed_event/3,
+        call_rule/3,
         event/1,
         event/2,
         event_data/1,
         event_time/1,
         event_source/1,
-        start_loop/1,
         start_timer/2,
         cancel_timer/1,
         reply/2
     ]).
 
+%% gen_server callbacks
 -export([
-        loop/1
+        init/1,
+        handle_call/3,
+        handle_cast/2,
+        handle_info/2,
+        terminate/2,
+        code_change/3
     ]).
 
 -export_type([
@@ -57,6 +66,10 @@
 -callback handle_event(cefp_event(), term()) -> {noevent, term()} | {event, term(), term()} | {events, [term()], term()} .
 -callback handle_call(term(), term(), term()) -> {reply, term(), term()} | {noreply, term()} .
 -callback handle_timeout(reference(), term(), term()) -> {noevent, term()} | {event, term(), term()} | {events, [term()], term()} .
+
+%%%===================================================================
+%%% Public API functions
+%%%===================================================================
 
 empty_flow() ->
     #cefp_flow{rules = orddict:new(), edges = []}
@@ -90,11 +103,11 @@ edges_out(WantFrom, #cefp_flow{edges = Edges}) ->
     .
 
 start_flow(Flow) ->
-    spawn(?MODULE, start_loop, [Flow])
+    gen_server:start(?MODULE, [Flow], [])
     .
 
 start_link_flow(Flow) ->
-    spawn_link(?MODULE, start_loop, [Flow])
+    gen_server:start_link(?MODULE, [Flow], [])
     .
 
 event(Data) ->
@@ -115,43 +128,63 @@ event_time(#cefp_event{ts = Ts}) -> Ts .
 event_source(#cefp_event{source = Source}) -> Source .
 
 send_event(Pid, Ev) ->
-    Pid ! {event, event(Ev)}
+    gen_server:cast(Pid, {event, event(Ev)})
     .
 
 send_timed_event(Pid, Ev, Time) ->
-    Pid ! {event, event(Ev, Time)}
+    gen_server:cast(Pid, {event, event(Ev, Time)})
     .
 
-start_loop(Flow) ->
+call_rule(Pid, RuleName, Msg) ->
+    gen_server:call(Pid, {call, RuleName, Msg})
+    .
+
+
+%%%===================================================================
+%%% gen_server callbacks
+%%%===================================================================
+
+init([Flow]) ->
     put(rule_name, []),
-    % rule_name is a stack to support nested flows.
-    % Used to know which rule is running if a rule calls various
-    % cefp functions like start_timer()
-    loop(Flow)
+    {ok, Flow}
     .
 
-loop(Flow) ->
-    receive
-        {event, Ev} ->
-            RuleEv = [{Rule,Ev} || Rule <- edges_out(start, Flow)],
-            {NewFlow, _Results} = rec_apply(RuleEv, Flow, []),
-            loop(NewFlow)
-            ;
-        {timeout, TRef, {rule_timeout, RuleName, Ev}} ->
-            % Should handle this differently if RuleName is a list vs an atom?
-            % Have to handle this differently, since the nested context is required
-            % before the event can be applied and properly "bubble out" of the nesting.
-            {NewFlow, _Results} = rec_apply([{RuleName, {timeout, TRef, Ev}}], Flow, []),
-            loop(NewFlow)
-            ;
-        shutdown ->
-            shutdown
-            ;
-        Msg ->
-            io:fwrite("unexpected message: ~p~n", [Msg]),
-            loop(Flow)
-    end
+handle_call({call, RuleName, Msg}, From, Flow) ->
+    Rule = get_rule(RuleName, Flow),
+    {[], NewRule} = run_rule({call, From, Msg}, Rule),
+    NewFlow = update_rule(NewRule, Flow),
+    {noreply, NewFlow}
     .
+
+handle_cast({event, Ev}, Flow) ->
+    RuleEv = [{Rule,Ev} || Rule <- edges_out(start, Flow)],
+    {NewFlow, _Results} = rec_apply(RuleEv, Flow, []),
+    {noreply, NewFlow}
+    .
+
+handle_info({timeout, TRef, {rule_timeout, RuleName, Ev}}, Flow) ->
+    % Should handle this differently if RuleName is a list vs an atom?
+    % Have to handle this differently, since the nested context is required
+    % before the event can be applied and properly "bubble out" of the nesting.
+    %
+    % what about handling this like a rule call (above) but handling the result
+    % differently, ie applying the result like an event?
+    {NewFlow, _Results} = rec_apply([{RuleName, {timeout, TRef, Ev}}], Flow, []),
+    {noreply, NewFlow}
+    .
+
+terminate(_Reason, _State) ->
+    ok
+    .
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}
+    .
+
+
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
 
 rec_apply([], Flow, Results) ->
     {Flow, Results}
@@ -189,6 +222,9 @@ run_rule(Ev = #cefp_event{}, Rule = #cefp_rule{name = Name, callback = Cb, state
     ;
 run_rule({timeout, Ref, Msg}, Rule = #cefp_rule{name = Name, callback = Cb, state = S}) ->
     handle_reply(call_rule_cb(Name, Cb, handle_timeout, [Ref, Msg, S]), {none, none}, Rule)
+    ;
+run_rule({call, From, Msg}, Rule = #cefp_rule{name = Name, callback = Cb, state = S}) ->
+    handle_reply(call_rule_cb(Name, Cb, handle_call, [Msg, From, S]), From, Rule)
     .
 
 call_rule_cb(RuleName, M, F, A) ->
@@ -198,8 +234,8 @@ call_rule_cb(RuleName, M, F, A) ->
     Result
     .
 
-handle_reply(Reply, From, Rule) ->
-    case Reply of
+handle_reply(RuleReply, From, Rule) ->
+    case RuleReply of
         {noevent, S1} ->
             {[], Rule#cefp_rule{state = S1}};
         {event, NewEv = #cefp_event{}, S1} ->

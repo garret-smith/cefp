@@ -1,5 +1,5 @@
 
--module(timer_test).
+-module(test_rule).
 
 -behaviour(cefp).
 
@@ -15,16 +15,15 @@ create(Name) ->
   cefp:rule(Name, ?MODULE, nostate)
   .
 
-handle_event(Ev, nostate) ->
+handle_event(Ev, State) ->
   cefp:start_timer(timeout, 10),
-  {event, Ev, nostate}
+  {event, Ev, State}
   .
 
-handle_timeout(_Ref, Msg, nostate) ->
-  {event, Msg, nostate}
+handle_timeout(_Ref, Msg, State) ->
+  {event, Msg, State}
   .
 
 handle_call(Msg, _From, State) ->
-  io:fwrite("unexpected call: ~p~n", [Msg]),
-  {noreply, State}
+  {reply, State, Msg}
   .
