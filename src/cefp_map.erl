@@ -18,13 +18,13 @@
 
 -define(S, cefp_map_state).
 
--spec create(term(), fun((cefp:cefp_event()) -> {event, term()})) -> cefp:cefp_rule() .
+-spec create(term(), fun((cefp:event()) -> {event, term()})) -> cefp:rule() .
 create(Name, EvFun) when is_function(EvFun, 1) ->
   cefp:rule(Name, ?MODULE, #?S{ev_map = EvFun})
   .
 
 handle_event(Ev, State = #?S{ev_map = EvFun}) ->
-  {event, NewEv} = EvFun(cefp:event_data(Ev)),
+  NewEv = EvFun(cefp:event_data(Ev)),
   {event, NewEv, State}
   .
 

@@ -110,6 +110,36 @@ call_test() ->
     ?assertEqual(newstate, cefp:call_rule(P, call_test, nostate))
     .
 
+nested_flow_test() ->
+    Self = self(),
+
+    F0 = cefp:new_flow(
+        [
+            cefp_map:create(map_times, fun(X) -> X * 2 end),
+            cefp_map:create(map_plus, fun(X) -> X + 3 end)
+        ],
+        [{start, map_times}, {map_times, map_plus}]
+    ),
+
+    F1 = cefp:new_flow(
+        [
+            cefp_map:create(map_plus, fun(X) -> X + 1 end),
+            cefp_flow:create(nested, F0),
+            cefp_map:create(map_times, fun(X) -> X * 2 end),
+            cefp_sink:create(sink, fun(Ev) -> io:fwrite("~p", [Ev]), Self ! Ev end)
+        ],
+        [{start, map_plus}, {map_plus, nested}, {nested, map_times}, {map_times, sink}]
+    ),
+
+    {ok, P} = cefp:start_link_flow(F1),
+
+    cefp:send_event(P, 1),
+
+    N = next_msg(100),
+
+    ?assertEqual(14, N)
+    .
+
 next_msg(Timeout) ->
     receive X -> X after Timeout -> nada end
     .

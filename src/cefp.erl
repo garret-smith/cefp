@@ -38,9 +38,14 @@
         code_change/3
     ]).
 
+-export([
+        rec_apply/3
+    ]).
+
 -export_type([
-        cefp_event/0,
-        cefp_rule/0
+        event/0,
+        rule/0,
+        flow/0
     ]).
 
 -record(cefp_rule, {
@@ -60,10 +65,11 @@
         source % name of the rule the event came from
     }).
 
--opaque cefp_rule() :: #cefp_rule{}.
--opaque cefp_event() :: #cefp_event{}.
+-opaque event() :: #cefp_event{}.
+-opaque rule() :: #cefp_rule{}.
+-opaque flow() :: #cefp_flow{}.
 
--callback handle_event(cefp_event(), term()) -> {noevent, term()} | {event, term(), term()} | {events, [term()], term()} .
+-callback handle_event(event(), term()) -> {noevent, term()} | {event, term(), term()} | {events, [term()], term()} .
 -callback handle_call(term(), term(), term()) -> {reply, term(), term()} | {noreply, term()} .
 -callback handle_timeout(reference(), term(), term()) -> {noevent, term()} | {event, term(), term()} | {events, [term()], term()} .
 

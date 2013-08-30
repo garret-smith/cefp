@@ -10,7 +10,7 @@
     handle_call/3
   ]).
 
--spec create(term(), fun((cefp:cefp_event()) -> term())) -> cefp:cefp_rule() .
+-spec create(term(), fun((cefp:event()) -> term())) -> cefp:rule() .
 create(Name, EvFun) when is_function(EvFun, 1) ->
   cefp:rule(Name, ?MODULE, EvFun)
   .
