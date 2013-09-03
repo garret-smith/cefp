@@ -64,7 +64,10 @@ sliding_window_test() ->
     Val = receive {avg, V1} -> V1 after 10 -> nada end,
 
     ?assertEqual(nada, Nada),
-    ?assertEqual(3.0, Val)
+    ?assertEqual(3.0, Val),
+
+    unlink(P),
+    ok = cefp:stop_flow(P)
     .
 
 timer_test() ->
@@ -90,7 +93,10 @@ timer_test() ->
 
     M2 = next_msg(1000),
 
-    ?assertEqual(timeout, M2)
+    ?assertEqual(timeout, M2),
+
+    unlink(P),
+    ok = cefp:stop_flow(P)
     .
 
 call_test() ->
@@ -107,7 +113,10 @@ call_test() ->
     {ok, P} = cefp:start_link_flow(F0),
 
     ?assertEqual(nostate, cefp:call_rule(P, call_test, newstate)),
-    ?assertEqual(newstate, cefp:call_rule(P, call_test, nostate))
+    ?assertEqual(newstate, cefp:call_rule(P, call_test, nostate)),
+
+    unlink(P),
+    ok = cefp:stop_flow(P)
     .
 
 nested_flow_test() ->
@@ -137,7 +146,54 @@ nested_flow_test() ->
 
     N = next_msg(100),
 
-    ?assertEqual(14, N)
+    ?assertEqual(14, N),
+
+    unlink(P),
+    ok = cefp:stop_flow(P)
+    .
+
+rule_fail_test() ->
+    F0 = cefp:new_chain_flow([
+        cefp_map:create(should_fail, fun(X) -> X + a end)
+    ]),
+    {ok, P} = cefp:start_flow(F0),
+    Mref = monitor(process, P),
+    cefp:send_event(P, 1),
+
+    Died = receive
+        {'DOWN', Mref, process, P, _Reason} -> dead
+    after
+        1000 -> alive
+    end,
+
+    ?assertEqual(dead, Died)
+    .
+
+nested_timer_test() ->
+    Self = self(),
+
+    F0 = cefp:new_chain_flow([
+        test_rule:create(timer_test)
+    ]),
+
+    F1 = cefp:new_chain_flow([
+        cefp_flow:create(nested, F0),
+        cefp_sink:create(sink, fun(Ev) -> io:fwrite("ev '~p'~n", [Ev]), Self ! Ev end)
+    ]),
+
+    {ok, P} = cefp:start_flow(F1),
+
+    cefp:send_event(P, 1),
+
+    N = next_msg(100),
+
+    ?assertEqual(1, N),
+
+    N2 = next_msg(100),
+
+    ?assertEqual(timeout, N2),
+
+    ok = cefp:stop_flow(P)
     .
 
 next_msg(Timeout) ->

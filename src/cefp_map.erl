@@ -7,32 +7,25 @@
   [
     create/2,
     handle_event/2,
-    handle_timeout/3,
+    handle_timeout/2,
     handle_call/3
   ]).
 
--record(cefp_map_state,
-  {
-    ev_map
-  }).
-
--define(S, cefp_map_state).
-
--spec create(term(), fun((cefp:event()) -> {event, term()})) -> cefp:rule() .
+-spec create(term(), fun((term()) -> term())) -> cefp:rule() .
 create(Name, EvFun) when is_function(EvFun, 1) ->
-  cefp:rule(Name, ?MODULE, #?S{ev_map = EvFun})
+  cefp:rule(Name, ?MODULE, EvFun)
   .
 
-handle_event(Ev, State = #?S{ev_map = EvFun}) ->
-  NewEv = EvFun(cefp:event_data(Ev)),
-  {event, NewEv, State}
+handle_event(Ev, EvFun) ->
+  NewEv = EvFun(Ev),
+  [{event, NewEv}]
   .
 
-handle_timeout(_Ref, _Msg, State) ->
-  {noevent, State}
+handle_timeout(_Msg, _State) ->
+  []
   .
 
-handle_call(Msg, _From, State) ->
+handle_call(Msg, _From, _State) ->
   io:fwrite("unexpected call: ~p~n", [Msg]),
-  {noreply, State}
+  []
   .
