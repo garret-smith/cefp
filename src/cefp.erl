@@ -19,6 +19,7 @@
         stop_flow/1,
         send_event/2,
         call_rule/3,
+        call_nested_rule/3,
         reply/2
     ]).
 
@@ -34,6 +35,7 @@
 
 -export([
         rec_apply/3,
+        timer_rule/2,
         timer_delivery/2,
         start_stop_timers/1
     ]).
@@ -46,14 +48,13 @@
 -record(cefp_rule, {
         name      :: term(),
         callback  :: module(),
-        state     :: term(),
-        timers    :: [{term(), reference()}]
+        state     :: term()
     }).
 
 -record(cefp_flow, {
         rules :: orddict:orddict(), % vertices
         edges :: [{From :: term(), To :: term()}],
-        timers :: [{reference(), RuleName :: term()}]
+        timers :: [{reference(), RuleName :: term(), Value :: term()}]
     }).
 
 -opaque rule() :: #cefp_rule{}.
@@ -112,7 +113,7 @@ add_rule(Rule, Flow = #cefp_flow{rules = Rules}) ->
     .
 
 rule(Name, CallbackModule, InitialState) ->
-    #cefp_rule{name = Name, callback = CallbackModule, state = InitialState, timers = []}
+    #cefp_rule{name = Name, callback = CallbackModule, state = InitialState}
     .
 
 add_edge(From, To, Flow = #cefp_flow{edges = Edges}) ->
@@ -141,6 +142,16 @@ send_event(Pid, Ev) ->
     gen_server:cast(Pid, {event, Ev})
     .
 
+%% Call nested rules like [a, b, c] will call rule 'c' which is
+%% inside flow 'b' which is inside flow 'a', which is running as Pid
+call_nested_rule(Pid, FlowPath, Msg) ->
+    Call = make_nest(lists:reverse(FlowPath), Msg),
+    gen_server:call(Pid, Call)
+    .
+
+make_nest([], Msg) -> Msg;
+make_nest([Rule | RuleNames], Msg) -> make_nest(RuleNames, {call, Rule, Msg}) .
+
 call_rule(Pid, RuleName, Msg) ->
     gen_server:call(Pid, {call, RuleName, Msg})
     .
@@ -156,11 +167,10 @@ init([Flow]) ->
     .
 
 handle_call({call, RuleName, Msg}, From, Flow) ->
-    Rule = get_rule(RuleName, Flow),
-    try do_call_rule(Rule, {call, From, Msg}) of
-        {[], NewRule} ->
-            NewFlow = update_rule(NewRule, Flow),
-            {noreply, NewFlow}
+    try rec_apply([{RuleName, {call, From, Msg}}], Flow, []) of
+        {Flow1, Results} ->
+            {[], Flow2} = timer_delivery(Results, Flow1),
+            {noreply, Flow2}
     catch
         throw:{rule_error, FailedRule, FailedCall, Reason} ->
             Err = {rule_error, FailedRule, FailedCall, Reason},
@@ -185,8 +195,8 @@ handle_cast({event, Ev}, Flow) ->
     .
 
 handle_info({timeout, TRef, rule_timeout}, Flow) ->
-    {RuleName, Flow1} = timer_rule(TRef, Flow),
-    try rec_apply([{RuleName, {rule_timeout, TRef}}], Flow1, []) of
+    {{RuleName, Term}, Flow1} = timer_rule(TRef, Flow),
+    try rec_apply([{RuleName, {rule_timeout, Term}}], Flow1, []) of
         {Flow2, []} ->
             {noreply, Flow2}
     catch
@@ -239,21 +249,15 @@ update_rule(NewRule = #cefp_rule{name = RuleName}, Flow = #cefp_flow{rules = Rul
     .
 
 timer_rule(TRef, Flow = #cefp_flow{timers = Timers}) ->
-    {value, {TRef, RuleName}, NewTimers} = lists:keytake(TRef, 1, Timers),
-    {RuleName, Flow#cefp_flow{timers = NewTimers}}
+    {value, {TRef, RuleName, Value}, NewTimers} = lists:keytake(TRef, 1, Timers),
+    {{RuleName, Value}, Flow#cefp_flow{timers = NewTimers}}
     .
 
-do_call_rule(R = #cefp_rule{callback = Cb, state = S, timers = Timers}, {rule_timeout, TRef}) ->
-    case lists:keytake(TRef, 1, Timers) of
-        false ->
-            throw({rule_error, R, no_timer, TRef})
-            ;
-        {value, {TRef, Term}, NewTimers} ->
-            try
-                handle_rule_return({Cb:handle_timeout(Term, S), R#cefp_rule{timers = NewTimers}})
-            catch
-                _Type:Reason -> throw({rule_error, R, {handle_timeout, [Term, S]}, Reason})
-            end
+do_call_rule(R = #cefp_rule{callback = Cb, state = S}, {rule_timeout, Term}) ->
+    try
+        handle_rule_return({Cb:handle_timeout(Term, S), R})
+    catch
+        _Type:Reason -> throw({rule_error, R, {handle_timeout, [Term, S]}, Reason})
     end
     ;
 do_call_rule(R = #cefp_rule{callback = Cb, state = S}, {call, From, Msg}) ->
@@ -317,11 +321,12 @@ consolidate_events(RuleReturn) ->
 
 timer_delivery(TimerActions, F) ->
     {NewFlow, Actions} = lists:foldr(
-        fun({deliver_timer, TRef, RuleName}, {Flow = #cefp_flow{timers = Timers}, Evs}) ->
-                {Flow#cefp_flow{timers = [{TRef, RuleName} | Timers]}, Evs};
-            ({undeliver_timer, TRef}, {Flow = #cefp_flow{timers = Timers}, Evs}) ->
-                {value, {TRef, _RuleName}, NewTimers} = lists:keytake(TRef, 1, Timers),
-                {Flow#cefp_rule{timers = NewTimers}, Evs};
+        fun({deliver_timer, TRef, RuleName, Term}, {Flow = #cefp_flow{timers = Timers}, Evs}) ->
+                {Flow#cefp_flow{timers = [{TRef, RuleName, Term} | Timers]}, Evs};
+            ({cancel_timer, Term}, {Flow = #cefp_flow{timers = Timers}, Evs}) ->
+                {value, {TRef, _RuleName, Term}, NewTimers} = lists:keytake(Term, 3, Timers),
+                erlang:cancel_timer(TRef),
+                {Flow#cefp_flow{timers = NewTimers}, Evs};
             (Ev, {Flow, Evs}) ->
                 {Flow, [Ev | Evs]}
         end,
@@ -333,13 +338,9 @@ timer_delivery(TimerActions, F) ->
 
 start_stop_timers({RuleReturn, R = #cefp_rule{name = Name}}) ->
     {NewRule, NewReturn} = lists:foldr(
-        fun({start_timer, Time, Term}, {Rule = #cefp_rule{timers = Timers}, Evs}) ->
+        fun({start_timer, Time, Term}, {Rule, Evs}) ->
                 TRef = erlang:start_timer(Time, self(), rule_timeout),
-                {Rule#cefp_rule{timers = [{TRef, Term} | Timers]}, [{deliver_timer, TRef, Name} | Evs]};
-            ({cancel_timer, Term}, {Rule = #cefp_rule{timers = Timers}, Evs}) ->
-                {value, {TRef, Term}, NewTimers} = lists:keytake(Term, 2, Timers),
-                erlang:cancel_timer(TRef),
-                {Rule#cefp_rule{timers = NewTimers}, [{undeliver_timer, TRef} | Evs]};
+                {Rule, [{deliver_timer, TRef, Name, Term} | Evs]};
             (Ev, {Rule, Evs}) ->
                 {Rule, [Ev | Evs]}
         end,

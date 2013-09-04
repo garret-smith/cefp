@@ -27,31 +27,39 @@ create(Name, Flow) ->
 handle_event(Ev, State = #?S{name = Name, flow = Flow}) ->
   RuleEv = [{Rule,Ev} || Rule <- cefp:edges_out(start, Flow)],
   {Flow1, Results} = cefp:rec_apply(RuleEv, Flow, []),
+  {UpdatedActions, Flow2} = apply_actions(Results, Flow1, Name),
+  [{state, State#?S{flow = Flow2}} | UpdatedActions]
+  .
+
+handle_timeout(Msg, State = #?S{name = Name, flow = Flow}) ->
+  {{RuleName, Term}, Flow1} = cefp:timer_rule(Msg, Flow),
+  {Flow2, Results} = cefp:rec_apply([{RuleName, {rule_timeout, Term}}], Flow1, []),
+  {UpdatedActions, Flow3} = apply_actions(Results, Flow2, Name),
+  [{state, State#?S{flow = Flow3}} | UpdatedActions]
+  .
+
+handle_call({call, RuleName, Msg}, From, State = #?S{name = Name, flow = Flow}) ->
+  {Flow1, Results} = cefp:rec_apply([{RuleName, {call, From, Msg}}], Flow, []),
+  {UpdatedActions, Flow2} = apply_actions(Results, Flow1, Name),
+  [{state, State#?S{flow = Flow2}} | UpdatedActions]
+  .
+
+apply_actions(Actions, Flow, MyName) ->
+  % Results could have {deliver_timer, TRef, Rule, Term} and {cancel_timer, Term} directives
   {TimerActions, Events} = lists:partition(
       fun
-        ({deliver_timer, _, _}) -> true;
-        ({undeliver_timer, _, _}) -> true;
+        ({deliver_timer, _, _, _}) -> true;
+        ({cancel_timer, _}) -> true;
         (_) -> false
       end,
-      Results),
-  {[], Flow2} = cefp:timer_delivery(TimerActions, Flow1),
+      Actions),
   UpdatedTimerActions = lists:map(
       fun
-        ({deliver_timer, TRef, _}) -> {deliver_timer, TRef, Name};
-        ({undeliver_timer, TRef, _}) -> {undeliver_timer, TRef, Name}
+        ({deliver_timer, TRef, _, _Term}) -> {deliver_timer, TRef, MyName, TRef};
+        ({cancel_timer, Term}) -> {cancel_timer, Term}
       end,
       TimerActions),
-  io:fwrite("updated: ~p~n", [UpdatedTimerActions]),
-  [{events, Events}, {state, State#?S{flow = Flow2}}] ++ UpdatedTimerActions
-  .
-
-handle_timeout(Msg, _State) ->
-  io:fwrite("cefp_flow timer: ~p~n", [Msg]),
-  []
-  .
-
-handle_call(Msg, _From, _State) ->
-  io:fwrite("unexpected call: ~p~n", [Msg]),
-  []
+  {[], Flow1} = cefp:timer_delivery(TimerActions, Flow),
+  {[{events, Events} | UpdatedTimerActions], Flow1}
   .
 

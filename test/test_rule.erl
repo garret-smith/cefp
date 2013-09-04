@@ -16,7 +16,7 @@ create(Name) ->
   .
 
 handle_event(Ev, _State) ->
-  [{event, Ev},{start_timer, 100, timeout}]
+  [{event, Ev},{start_timer, 50, timeout}]
   .
 
 handle_timeout(Msg, _State) ->
@@ -24,5 +24,5 @@ handle_timeout(Msg, _State) ->
   .
 
 handle_call(Msg, _From, State) ->
-  [{reply, State}, {state, Msg}]
+  [{reply, State}, {state, Msg}, {event, Msg}, {start_timer, 50, {call, Msg}}]
   .
