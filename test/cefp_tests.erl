@@ -23,7 +23,7 @@ edges_out_test() ->
                 sw,
                 3,
                 id_match(1),
-                fun(Readings) -> lists:sum([R#reading.value || R <- Readings]) / length(Readings) end
+                fun readings_avg/1
             ),
             cefp_sink:create(sink, fun(Ev) -> Self ! Ev end)
         ],
@@ -42,7 +42,7 @@ sliding_window_test() ->
                 sw,
                 3,
                 id_match(1),
-                fun(Readings) -> lists:sum([R#reading.value || R <- Readings]) / length(Readings) end
+                fun readings_avg/1
             ),
             cefp_sink:create(sink, fun(Ev) -> Self ! {avg, Ev} end)
         ],
@@ -230,8 +230,8 @@ call_nested_rule_test() ->
     ?assertEqual(newstate, cefp:call_nested_rule(P, [a, b, c], nostate)),
 
     %% Not really part of the test, but these asserts
-    %% just exercise more of the nesting internals,
-    %% and the handle_call can return events and timers
+    %% just exercise more of the nesting internals like
+    %% handle_call can return events and timers
     N1 = next_msg(100),
     ?assertEqual(newstate, N1),
     N2 = next_msg(100),
@@ -243,6 +243,80 @@ call_nested_rule_test() ->
     ?assertEqual({call, nostate}, N4),
 
     ok = cefp:stop_flow(P)
+    .
+
+chained_timer_cancel_test() ->
+    Self = self(),
+
+    T = 10,
+
+    F = cefp:new_chain_flow([
+        cefp_fun:create(a, [
+            {timeout, fun(Ev) -> Self ! Ev, [{start_timer, T, timeout}] end},
+            {event, fun
+                    (start) -> [{start_timer, T, timeout}];
+                    (stop) -> [{cancel_timer, timeout}]
+                end
+            }
+        ])
+    ]),
+
+    {ok, P} = cefp:start_flow(F),
+
+    cefp:send_event(P, start),
+
+    timer:sleep(T),
+
+    ?assertEqual(timeout, next_msg(2*T)),
+    ?assertEqual(timeout, next_msg(2*T)),
+    ?assertEqual(timeout, next_msg(2*T)),
+
+    cefp:send_event(P, stop),
+
+    ?assertEqual(nada, next_msg(2*T)),
+    ?assertEqual(nada, next_msg(2*T)),
+
+    ok = cefp:stop_flow(P)
+    .
+
+timer_spacing_test() ->
+    Self = self(),
+
+    T = 5,
+
+    F = cefp:new_chain_flow([
+        cefp_fun:create(a, [
+            {timeout, fun(_) -> Self ! now(), [{start_timer, T, timeout}] end},
+            {event, fun
+                    (start) -> [{start_timer, T, timeout}];
+                    (stop) -> [{cancel_timer, timeout}]
+                end
+            }
+        ])
+    ]),
+
+    {ok, P} = cefp:start_flow(F),
+
+    cefp:send_event(P, start),
+
+    FirstT = next_msg(2*T),
+
+    Spacings = timer_spacing(FirstT, [], 10),
+
+    ?debugFmt("T: ~p, timer spacings: ~p", [T, Spacings]),
+    Jitter = [S - (T * 1000) || S <- Spacings],
+
+    ?debugFmt("timer jitter: ~p", [Jitter]),
+
+    ok = cefp:stop_flow(P)
+    .
+
+timer_spacing(_, Diffs, 0) ->
+    Diffs;
+timer_spacing(PrevTime, Diffs, N) ->
+    T = next_msg(1000),
+    Diff = timer:now_diff(T, PrevTime),
+    timer_spacing(T, [Diff | Diffs], N-1)
     .
 
 next_msg(Timeout) ->

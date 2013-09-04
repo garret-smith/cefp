@@ -197,8 +197,9 @@ handle_cast({event, Ev}, Flow) ->
 handle_info({timeout, TRef, rule_timeout}, Flow) ->
     {{RuleName, Term}, Flow1} = timer_rule(TRef, Flow),
     try rec_apply([{RuleName, {rule_timeout, Term}}], Flow1, []) of
-        {Flow2, []} ->
-            {noreply, Flow2}
+        {Flow2, Results} ->
+            {[], Flow3} = timer_delivery(Results, Flow2),
+            {noreply, Flow3}
     catch
         throw:{rule_error, FailedRule, FailedCall, Reason} ->
             {stop, {rule_error, FailedRule, FailedCall, Reason}, Flow1}
