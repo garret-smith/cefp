@@ -286,7 +286,7 @@ timer_spacing_test() ->
 
     F = cefp:new_chain_flow([
         cefp_fun:create(a, [
-            {timeout, fun(_) -> Self ! now(), [{start_timer, T, timeout}] end},
+            {timeout, fun(_) -> Self ! os:timestamp(), [{start_timer, T, timeout}] end},
             {event, fun
                     (start) -> [{start_timer, T, timeout}];
                     (stop) -> [{cancel_timer, timeout}]
@@ -309,6 +309,33 @@ timer_spacing_test() ->
     ?debugFmt("timer jitter: ~p", [Jitter]),
 
     ok = cefp:stop_flow(P)
+    .
+
+proc_timer_test() ->
+    Self = self(),
+    T = 0,
+
+    P = spawn(fun() -> timer_looper(Self, T) end),
+
+    FirstT = next_msg(2*T + 5),
+    Spacings = timer_spacing(FirstT, [], 10),
+    ?debugFmt("T: ~p, timer spacings: ~p", [T, Spacings]),
+    Jitter = [S - (T * 1000) || S <- Spacings],
+
+    ?debugFmt("timer jitter: ~p", [Jitter]),
+
+    P ! stop
+    .
+
+timer_looper(SendTo, T) ->
+    SendTo ! os:timestamp(),
+    erlang:send_after(T, self(), timeout),
+    receive
+        timeout ->
+            timer_looper(SendTo, T);
+        stop ->
+            ok
+    end
     .
 
 timer_spacing(_, Diffs, 0) ->
