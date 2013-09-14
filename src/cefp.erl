@@ -323,7 +323,7 @@ consolidate_events(RuleReturn) ->
 timer_delivery(TimerActions, F) ->
     {NewFlow, Actions} = lists:foldr(
         fun({deliver_timer, TRef, RuleName, Term}, {Flow = #cefp_flow{timers = Timers}, Evs}) ->
-                {Flow#cefp_flow{timers = [{TRef, RuleName, Term} | Timers]}, Evs};
+                {Flow#cefp_flow{timers = [{TRef, RuleName, Term} | cancel_if_running(RuleName, Term, Timers)]}, Evs};
             ({cancel_timer, Term}, {Flow = #cefp_flow{timers = Timers}, Evs}) ->
                 {value, {TRef, _RuleName, Term}, NewTimers} = lists:keytake(Term, 3, Timers),
                 erlang:cancel_timer(TRef),
@@ -335,6 +335,16 @@ timer_delivery(TimerActions, F) ->
         TimerActions
     ),
     {Actions, NewFlow}
+    .
+
+cancel_if_running(RuleName, Term, Timers) ->
+    case [TRef || {TRef, R, T} <- Timers, R == RuleName, T == Term] of
+        [] -> Timers;
+        [CancelRef] ->
+            erlang:cancel_timer(CancelRef),
+            {value, _, NewTimers} = lists:keytake(CancelRef, 1, Timers),
+            NewTimers
+    end
     .
 
 start_stop_timers({RuleReturn, R = #cefp_rule{name = Name}}) ->

@@ -198,7 +198,47 @@ call_nested_rule_test() ->
     ok = cefp:stop_flow(P)
     .
 
+reset_timer_test() ->
+    % move a pending timer further into the future
+    Self = self(),
+
+    T = 1000,
+    Wait = 800,
+
+    F = cefp:new_chain_flow([
+        cefp_fun:create(a, [
+            {timeout, fun(Ev) -> Self ! Ev, [{start_timer, T, timeout}] end},
+            {event, fun
+                    (start) -> [{start_timer, T, timeout}];
+                    (stop) -> [{cancel_timer, timeout}]
+                end
+            }
+        ])
+    ]),
+
+    {ok, P} = cefp:start_flow(F),
+
+    cefp:send_event(P, start),
+
+    timer:sleep(Wait),
+
+    cefp:send_event(P, start),
+
+    ?assertEqual(nada, next_msg(Wait)),
+
+    cefp:send_event(P, start),
+
+    ?assertEqual(nada, next_msg(Wait)),
+
+    cefp:send_event(P, stop),
+
+    ?assertEqual(nada, next_msg(Wait)),
+
+    ok = cefp:stop_flow(P)
+    .
+
 chained_timer_cancel_test() ->
+    % timeouts schedule more timers
     Self = self(),
 
     T = 10,
@@ -226,8 +266,7 @@ chained_timer_cancel_test() ->
 
     cefp:send_event(P, stop),
 
-    ?assertEqual(nada, next_msg(2*T)),
-    ?assertEqual(nada, next_msg(2*T)),
+    ?assertEqual(nada, next_msg(4*T)),
 
     ok = cefp:stop_flow(P)
     .
