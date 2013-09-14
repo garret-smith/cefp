@@ -45,18 +45,18 @@ handle_call({call, RuleName, Msg}, From, State = #?S{name = Name, flow = Flow}) 
   .
 
 apply_actions(Actions, Flow, MyName) ->
-  % Results could have {deliver_timer, TRef, Rule, Term} and {cancel_timer, Term} directives
+  % Results could have {deliver_timer, TRef, RuleName, Term} and {cancel_timer, RuleName, Term} directives
   {TimerActions, Events} = lists:partition(
       fun
         ({deliver_timer, _, _, _}) -> true;
-        ({cancel_timer, _}) -> true;
+        ({cancel_timer, _, _}) -> true;
         (_) -> false
       end,
       Actions),
   UpdatedTimerActions = lists:map(
       fun
         ({deliver_timer, TRef, _, _Term}) -> {deliver_timer, TRef, MyName, TRef};
-        ({cancel_timer, Term}) -> {cancel_timer, Term}
+        ({cancel_timer, _, Term}) -> {cancel_timer, MyName, Term}
       end,
       TimerActions),
   {[], Flow1} = cefp:timer_delivery(TimerActions, Flow),

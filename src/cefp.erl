@@ -324,10 +324,8 @@ timer_delivery(TimerActions, F) ->
     {NewFlow, Actions} = lists:foldr(
         fun({deliver_timer, TRef, RuleName, Term}, {Flow = #cefp_flow{timers = Timers}, Evs}) ->
                 {Flow#cefp_flow{timers = [{TRef, RuleName, Term} | cancel_if_running(RuleName, Term, Timers)]}, Evs};
-            ({cancel_timer, Term}, {Flow = #cefp_flow{timers = Timers}, Evs}) ->
-                {value, {TRef, _RuleName, Term}, NewTimers} = lists:keytake(Term, 3, Timers),
-                erlang:cancel_timer(TRef),
-                {Flow#cefp_flow{timers = NewTimers}, Evs};
+            ({cancel_timer, RuleName, Term}, {Flow = #cefp_flow{timers = Timers}, Evs}) ->
+                {Flow#cefp_flow{timers = cancel_if_running(RuleName, Term, Timers)}, Evs};
             (Ev, {Flow, Evs}) ->
                 {Flow, [Ev | Evs]}
         end,
@@ -352,6 +350,8 @@ start_stop_timers({RuleReturn, R = #cefp_rule{name = Name}}) ->
         fun({start_timer, Time, Term}, {Rule, Evs}) ->
                 TRef = erlang:start_timer(Time, self(), rule_timeout),
                 {Rule, [{deliver_timer, TRef, Name, Term} | Evs]};
+            ({cancel_timer, Term}, {Rule, Evs}) ->
+                {Rule, [{cancel_timer, Name, Term} | Evs]};
             (Ev, {Rule, Evs}) ->
                 {Rule, [Ev | Evs]}
         end,

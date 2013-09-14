@@ -198,14 +198,14 @@ call_nested_rule_test() ->
     ok = cefp:stop_flow(P)
     .
 
-reset_timer_test() ->
+reset_nested_timer_test() ->
     % move a pending timer further into the future
     Self = self(),
 
     T = 1000,
     Wait = 800,
 
-    F = cefp:new_chain_flow([
+    F0 = cefp:new_chain_flow([
         cefp_fun:create(a, [
             {timeout, fun(Ev) -> Self ! Ev, [{start_timer, T, timeout}] end},
             {event, fun
@@ -216,7 +216,11 @@ reset_timer_test() ->
         ])
     ]),
 
-    {ok, P} = cefp:start_flow(F),
+    F1 = cefp:new_chain_flow([
+        cefp_flow:create(b, F0)
+    ]),
+
+    {ok, P} = cefp:start_flow(F1),
 
     cefp:send_event(P, start),
 
