@@ -20,6 +20,7 @@
         send_event/2,
         call_rule/3,
         call_nested_rule/3,
+        snapshot/1,
         reply/2
     ]).
 
@@ -33,12 +34,19 @@
         code_change/3
     ]).
 
+%% internal functions
 -export([
         rec_apply/3,
         timer_rule/2,
         timer_delivery/2,
         start_stop_timers/1
     ]).
+
+-ifdef(TEST).
+-export([
+    timers/1
+    ]).
+-endif.
 
 -export_type([
         rule/0,
@@ -156,6 +164,9 @@ call_rule(Pid, RuleName, Msg) ->
     gen_server:call(Pid, {call, RuleName, Msg})
     .
 
+snapshot(Pid) ->
+    gen_server:call(Pid, snapshot)
+    .
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -176,6 +187,10 @@ handle_call({call, RuleName, Msg}, From, Flow) ->
             Err = {rule_error, FailedRule, FailedCall, Reason},
             {stop, Err, Err, Flow}
     end
+    ;
+
+handle_call(snapshot, _From, Flow) ->
+    {reply, Flow, Flow}
     ;
 
 handle_call(stop, _From, Flow) ->
@@ -364,4 +379,8 @@ start_stop_timers({RuleReturn, R = #cefp_rule{name = Name}}) ->
 reply(From, Reply) ->
     gen:reply(From, Reply)
     .
+
+-ifdef(TEST).
+timers(#cefp_flow{timers = T}) -> T .
+-endif.
 

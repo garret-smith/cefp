@@ -157,6 +157,9 @@ nested_timer_test() ->
 
     ?assertEqual(timeout, N2),
 
+    FS = cefp:snapshot(P),
+    ?assertEqual([], cefp:timers(FS)),
+
     ok = cefp:stop_flow(P)
     .
 
@@ -194,6 +197,9 @@ call_nested_rule_test() ->
     ?assertEqual({call, newstate}, N3),
     N4 = next_msg(100),
     ?assertEqual({call, nostate}, N4),
+
+    FS = cefp:snapshot(P),
+    ?assertEqual([], cefp:timers(FS)),
 
     ok = cefp:stop_flow(P)
     .
@@ -237,6 +243,9 @@ reset_nested_timer_test() ->
     cefp:send_event(P, stop),
 
     ?assertEqual(nada, next_msg(Wait)),
+
+    FS = cefp:snapshot(P),
+    ?assertEqual([], cefp:timers(FS)),
 
     ok = cefp:stop_flow(P)
     .
