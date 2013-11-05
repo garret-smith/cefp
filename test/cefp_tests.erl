@@ -83,6 +83,29 @@ call_test() ->
     ok = cefp:stop_flow(P)
     .
 
+multipath_test() ->
+    Self = self(),
+
+    F0 = cefp:new_flow(
+            [
+                cefp_map:create(map_times, fun(X) -> X * 2 end),
+                cefp_map:create(map_plus1, fun(X) -> X + 1 end),
+                cefp_map:create(map_plus2, fun(X) -> X + 2 end),
+                cefp_sink:create(deliver, fun(X) -> Self ! X end)
+            ],
+            [{start, map_times}, {map_times, map_plus1}, {map_times, map_plus2}, {map_plus1, deliver}, {map_plus2, deliver}]
+        ),
+
+    {ok, P} = cefp:start_link_flow(F0),
+    cefp:send_event(P, 1),
+
+    ?assertEqual(4, next_msg(100)),
+    ?assertEqual(3, next_msg(100)),
+
+    unlink(P),
+    ok = cefp:stop_flow(P)
+    .
+
 nested_flow_test() ->
     Self = self(),
 
@@ -111,6 +134,88 @@ nested_flow_test() ->
     N = next_msg(100),
 
     ?assertEqual(14, N),
+
+    unlink(P),
+    ok = cefp:stop_flow(P)
+    .
+
+redirect_flow_test() ->
+    Self = self(),
+
+    F0 = cefp:new_flow(
+        [
+            cefp_map:create(map_times, fun(X) -> X * 2 end),
+            cefp_map:create(map_plus, fun(X) -> X + 3 end)
+        ],
+        [{start, map_times}, {map_times, map_plus}]
+    ),
+
+    F1 = cefp:new_flow(
+        [
+            cefp_map:create(map_plus, fun(X) -> X + 1 end),
+            cefp_flow:create(nested, F0),
+            cefp_map:create(map_times, fun(X) -> X * 2 end),
+            cefp_sink:create(sink, fun(Ev) -> Self ! Ev end)
+        ],
+        [{start, map_plus}, {map_plus, nested}, {nested, map_times}, {map_times, sink}]
+    ),
+
+    {ok, P} = cefp:start_link_flow(F1),
+
+    cefp:send_event(P, 1),
+    ?assertEqual(14, next_msg(100)),
+
+    ok = cefp:redirect_flow(P, fun(Flow) ->
+                Fl1 = cefp:remove_edge(map_times, sink, Flow),
+                Fl2 = cefp:add_rule(cefp_map:create(map_plusagain, fun(X) -> X + 1 end), Fl1),
+                Fl3 = cefp:add_edge(map_times, map_plusagain, Fl2),
+                Fl4 = cefp:add_edge(map_plusagain, sink, Fl3),
+                Fl4
+        end),
+
+    cefp:send_event(P, 1),
+    ?assertEqual(15, next_msg(100)),
+
+    unlink(P),
+    ok = cefp:stop_flow(P)
+    .
+
+deep_nest_test() ->
+    Self = self(),
+
+    F0 = cefp:new_flow(
+        [
+            cefp_map:create(map_times, fun(X) -> X * 2 end),
+            cefp_map:create(map_plus, fun(X) -> X + 3 end)
+        ],
+        [{start, map_times}, {map_times, map_plus}]
+    ),
+
+    F1 = cefp:new_flow(
+        [
+            cefp_map:create(map_plus, fun(X) -> X + 1 end),
+            cefp_flow:create(nested, F0),
+            cefp_map:create(map_times, fun(X) -> X * 2 end)
+        ],
+        [{start, map_plus}, {map_plus, nested}, {nested, map_times}]
+    ),
+
+    F2 = cefp:new_flow(
+        [
+            cefp_flow:create(nested, F1),
+            cefp_map:create(map_plus, fun(X) -> X + 1 end),
+            cefp_sink:create(sink, fun(Ev) -> Self ! Ev end)
+        ],
+        [{start, nested}, {nested, map_plus}, {map_plus, sink}]
+    ),
+
+    {ok, P} = cefp:start_link_flow(F2),
+
+    cefp:send_event(P, 1),
+
+    N = next_msg(100),
+
+    ?assertEqual(15, N),
 
     unlink(P),
     ok = cefp:stop_flow(P)
@@ -197,6 +302,48 @@ call_nested_rule_test() ->
     ?assertEqual({call, newstate}, N3),
     N4 = next_msg(100),
     ?assertEqual({call, nostate}, N4),
+
+    FS = cefp:snapshot(P),
+    ?assertEqual([], cefp:timers(FS)),
+
+    ok = cefp:stop_flow(P)
+    .
+
+reset_timer_test() ->
+    % move a pending timer further into the future
+    Self = self(),
+
+    T = 1000,
+    Wait = 800,
+
+    F0 = cefp:new_chain_flow([
+        cefp_fun:create(a, [
+            {timeout, fun(Ev) -> Self ! Ev, [{start_timer, T, timeout}] end},
+            {event, fun
+                    (start) -> [{start_timer, T, timeout}];
+                    (stop) -> [{cancel_timer, timeout}]
+                end
+            }
+        ])
+    ]),
+
+    {ok, P} = cefp:start_flow(F0),
+
+    cefp:send_event(P, start),
+
+    timer:sleep(Wait),
+
+    cefp:send_event(P, start),
+
+    ?assertEqual(nada, next_msg(Wait)),
+
+    cefp:send_event(P, start),
+
+    ?assertEqual(nada, next_msg(Wait)),
+
+    cefp:send_event(P, stop),
+
+    ?assertEqual(nada, next_msg(Wait)),
 
     FS = cefp:snapshot(P),
     ?assertEqual([], cefp:timers(FS)),

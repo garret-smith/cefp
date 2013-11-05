@@ -2,8 +2,8 @@
 default:
 	./rebar compile
 
-eunit:
-	./rebar -v compile eunit
+eunit: default
+	./rebar -v eunit
 
 clean:
 	./rebar clean

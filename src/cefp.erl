@@ -5,23 +5,31 @@
 
 -behaviour(gen_server).
 
-% public API
+%% public API
+
+% build flows offline
 -export([
         empty_flow/0,
         new_flow/2,
         new_chain_flow/1,
         add_rule/2,
+        remove_rule/2,
         rule/3,
         add_edge/3,
-        edges_out/2,
+        remove_edge/3,
+        edges_out/2
+    ]).
+
+% start & manage flows
+-export([
         start_flow/1,
         start_link_flow/1,
         stop_flow/1,
+        redirect_flow/2,
         send_event/2,
         call_rule/3,
         call_nested_rule/3,
-        snapshot/1,
-        reply/2
+        snapshot/1
     ]).
 
 %% gen_server callbacks
@@ -116,7 +124,15 @@ new_chain_flow(Rules) ->
 
 add_rule(Rule, Flow = #cefp_flow{rules = Rules}) ->
     Flow#cefp_flow{
-        rules = orddict:append(Rule#cefp_rule.name, Rule, Rules)
+        rules = orddict:store(Rule#cefp_rule.name, Rule, Rules)
+    }
+    .
+
+remove_rule(RuleName, Flow = #cefp_flow{rules = Rules}) ->
+    % TODO: Cancel timers too?
+    % TODO: Remove all edges to/from this rule at the same time?
+    Flow#cefp_flow{
+        rules = orddict:erase(RuleName, Rules)
     }
     .
 
@@ -127,6 +143,12 @@ rule(Name, CallbackModule, InitialState) ->
 add_edge(From, To, Flow = #cefp_flow{edges = Edges}) ->
     Flow#cefp_flow{
         edges = [{From, To} | Edges]
+    }
+    .
+
+remove_edge(From, To, Flow = #cefp_flow{edges = Edges}) ->
+    Flow#cefp_flow{
+        edges = Edges -- [{From, To}]
     }
     .
 
@@ -144,6 +166,10 @@ start_link_flow(Flow) ->
 
 stop_flow(Flow) ->
     gen_server:call(Flow, stop)
+    .
+
+redirect_flow(Flow, RedirectorFun) ->
+    gen_server:call(Flow, {redirect, RedirectorFun})
     .
 
 send_event(Pid, Ev) ->
@@ -173,7 +199,6 @@ snapshot(Pid) ->
 %%%===================================================================
 
 init([Flow]) ->
-    put(rule_name, []),
     {ok, Flow}
     .
 
@@ -190,7 +215,17 @@ handle_call({call, RuleName, Msg}, From, Flow) ->
     ;
 
 handle_call(snapshot, _From, Flow) ->
+    % TODO: turn timer refs into remaining time, or expiry time
     {reply, Flow, Flow}
+    ;
+
+handle_call({redirect, RedirectFun}, _From, Flow) ->
+    {Reply, NewFlow} = try
+        {ok, RedirectFun(Flow)}
+    catch
+        E:R -> {{error, {E,R}}, Flow}
+    end,
+    {reply, Reply, NewFlow}
     ;
 
 handle_call(stop, _From, Flow) ->

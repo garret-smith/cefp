@@ -27,39 +27,30 @@ create(Name, Flow) ->
 handle_event(Ev, State = #?S{name = Name, flow = Flow}) ->
   RuleEv = [{Rule,Ev} || Rule <- cefp:edges_out(start, Flow)],
   {Flow1, Results} = cefp:rec_apply(RuleEv, Flow, []),
-  {UpdatedActions, Flow2} = apply_actions(Results, Flow1, Name),
-  [{state, State#?S{flow = Flow2}} | UpdatedActions]
+  [{state, State#?S{flow = Flow1}} | rewrite_actions(Results, Name)]
   .
 
-handle_timeout(Msg, State = #?S{name = Name, flow = Flow}) ->
-  {{RuleName, Term}, Flow1} = cefp:timer_rule(Msg, Flow),
-  {Flow2, Results} = cefp:rec_apply([{RuleName, {rule_timeout, Term}}], Flow1, []),
-  {UpdatedActions, Flow3} = apply_actions(Results, Flow2, Name),
-  [{state, State#?S{flow = Flow3}} | UpdatedActions]
+handle_timeout(_Msg = {Rule, Term}, State = #?S{name = Name, flow = Flow}) ->
+  {Flow1, Results} = cefp:rec_apply([{Rule, {rule_timeout, Term}}], Flow, []),
+  [{state, State#?S{flow = Flow1}} | rewrite_actions(Results, Name)]
   .
 
 handle_call({call, RuleName, Msg}, From, State = #?S{name = Name, flow = Flow}) ->
   {Flow1, Results} = cefp:rec_apply([{RuleName, {call, From, Msg}}], Flow, []),
-  {UpdatedActions, Flow2} = apply_actions(Results, Flow1, Name),
-  [{state, State#?S{flow = Flow2}} | UpdatedActions]
+  [{state, State#?S{flow = Flow1}} | rewrite_actions(Results, Name)]
   .
 
-apply_actions(Actions, Flow, MyName) ->
+rewrite_actions(Actions, MyName) ->
   % Results could have {deliver_timer, TRef, RuleName, Term} and {cancel_timer, RuleName, Term} directives
-  {TimerActions, Events} = lists:partition(
-      fun
-        ({deliver_timer, _, _, _}) -> true;
-        ({cancel_timer, _, _}) -> true;
-        (_) -> false
-      end,
-      Actions),
   UpdatedTimerActions = lists:map(
       fun
-        ({deliver_timer, TRef, _, _Term}) -> {deliver_timer, TRef, MyName, TRef};
-        ({cancel_timer, _, Term}) -> {cancel_timer, MyName, Term}
+        ({deliver_timer, TRef, Rule, Term}) -> {deliver_timer, TRef, MyName, {Rule, Term}};
+        ({cancel_timer, Rule, Term}) -> {cancel_timer, MyName, {Rule, Term}};
+%        ({event, E}) -> {event, E};
+%        ({events, E}) -> {events, E};
+        (E) -> {event, E}
       end,
-      TimerActions),
-  {[], Flow1} = cefp:timer_delivery(TimerActions, Flow),
-  {[{events, Events} | UpdatedTimerActions], Flow1}
+      Actions),
+  UpdatedTimerActions
   .
 
